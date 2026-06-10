@@ -72,7 +72,7 @@ export async function analyzeDocument(
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content }],
   })
@@ -81,6 +81,9 @@ export async function analyzeDocument(
     .filter((b) => b.type === 'text')
     .map((b) => (b as Anthropic.TextBlock).text)
     .join('')
+
+  console.log('Anthropic raw response (first 500 chars):', text.slice(0, 500))
+  console.log('Stop reason:', response.stop_reason)
 
   // Strip markdown code fences if present
   const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
@@ -91,7 +94,10 @@ export async function analyzeDocument(
   } catch {
     // Last-resort: try to extract a JSON array from the text
     const match = cleaned.match(/\[[\s\S]*\]/)
-    if (!match) throw new Error('Anthropic response did not contain valid JSON')
+    if (!match) {
+      console.error('Full Anthropic response:', text)
+      throw new Error('Anthropic response did not contain valid JSON')
+    }
     parsed = JSON.parse(match[0])
   }
 
