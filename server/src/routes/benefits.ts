@@ -41,12 +41,30 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
     spentByCategory[exp.category_id] = (spentByCategory[exp.category_id] ?? 0) + Number(exp.amount)
   }
 
-  // Build a map of category_group → total spent across all items in that group
-  // Key is `${doc_type}:${category_group}` to keep groups scoped per document type
+  // A group is a shared pool only when ALL items in the group have the same
+  // category_group_total and no individual total_amount — meaning the cap is
+  // truly combined (e.g. Mental Health $2,000 shared between psychotherapy +
+  // clinical counselling). If items have individual caps of the same value
+  // (e.g. each paramedical service has its own $500), treat them independently.
+  const groupItemCounts: Record<string, number> = {}
+  const groupHasIndividualAmounts: Record<string, boolean> = {}
+  for (const cat of categories) {
+    if (cat.category_group) {
+      const key = `${cat.doc_type}:${cat.category_group}`
+      groupItemCounts[key] = (groupItemCounts[key] ?? 0) + 1
+      if (cat.total_amount != null) groupHasIndividualAmounts[key] = true
+    }
+  }
+
+  // Only pool groups that have >1 item and no individual amounts set
+  const isSharedGroup = (key: string) =>
+    (groupItemCounts[key] ?? 0) > 1 && !groupHasIndividualAmounts[key]
+
   const idToGroup: Record<string, string> = {}
   for (const cat of categories) {
     if (cat.category_group) {
-      idToGroup[cat.id] = `${cat.doc_type}:${cat.category_group}`
+      const key = `${cat.doc_type}:${cat.category_group}`
+      if (isSharedGroup(key)) idToGroup[cat.id] = key
     }
   }
 
@@ -59,13 +77,13 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
   }
 
   const result = categories.map((cat) => {
-    const groupKey = cat.category_group ? `${cat.doc_type}:${cat.category_group}` : null
-    const groupSpent = groupKey ? (spentByGroup[groupKey] ?? 0) : null
+    const groupKey = idToGroup[cat.id] ?? null
     const individualSpent = spentByCategory[cat.id] ?? 0
 
-    // If part of a group, use group-level totals for spent/remaining
-    const effectiveTotal = groupKey ? (cat.category_group_total ?? null) : cat.total_amount
-    const effectiveSpent = groupKey ? (groupSpent ?? 0) : individualSpent
+    const effectiveTotal = groupKey
+      ? (cat.category_group_total ?? null)
+      : (cat.total_amount ?? (cat.category_group_total ?? null))
+    const effectiveSpent = groupKey ? (spentByGroup[groupKey] ?? 0) : individualSpent
     const effectiveRemaining = effectiveTotal != null ? effectiveTotal - effectiveSpent : null
 
     return {
